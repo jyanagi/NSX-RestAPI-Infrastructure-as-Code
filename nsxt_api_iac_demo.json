@@ -1,0 +1,101 @@
+echo ""
+ echo "Define site specific variables:"
+ nsxtuser='admin'
+ nsxtpasswd='VMware1!VMware1!'
+ baseUrl="nsx.projectonestone.io"
+ echo "NSX-T FQDN: $baseUrl"
+ echo "NSX-T User: $nsxtuser"
+ echo ""
+ 
+ echo "Collect site specific IDs:"
+ overlay_transport_zone_id=$(curl --silent -k -u $nsxtuser:$nsxtpasswd -X GET "https://$baseUrl/policy/api/v1/infra/sites/default/enforcement-points/default/transport-zones" | jq -r '.results[0].id')
+ echo "Overlay Transport Zone ID: $overlay_transport_zone_id"
+ vlan_transport_zone_id=$(curl --silent -k -u $nsxtuser:$nsxtpasswd -X GET "https://$baseUrl/policy/api/v1/infra/sites/default/enforcement-points/default/transport-zones" | jq -r '.results[1].id')
+ echo "VLAN Transport Zone ID: $vlan_transport_zone_id"
+ edge_cluster_id=$(curl --silent -k -u $nsxtuser:$nsxtpasswd -X GET "https://$baseUrl/api/v1/edge-clusters" | jq -r '.results[1].id')
+ echo "Edge Cluster ID: $edge_cluster_id"
+ edge_node_0=$(curl --silent -k -u $nsxtuser:$nsxtpasswd -X GET "https://$baseUrl/api/v1/edge-clusters" | jq -r '.results[0].members[0].transport_node_id')
+ echo "Edge Node 0: $edge_node_0"
+ edge_node_1=$(curl --silent -k -u $nsxtuser:$nsxtpasswd -X GET "https://$baseUrl/api/v1/edge-clusters" | jq -r '.results[0].members[1].transport_node_id')
+ echo "Edge Node 1: $edge_node_1"
+ echo ""
+#<<'END_COMMENT'
+
+
+ echo "Step 1: Create External Segments"
+ curl --silent -k -u $nsxtuser:$nsxtpasswd -H "Content-Type: application/json" -d '{"type": "DISCONNECTED","vlan_ids": ["2811"],"transport_zone_path": "/infra/sites/default/enforcement-points/default/transport-zones/'"$vlan_transport_zone_id"'"}' -X PATCH "https://$baseUrl/policy/api/v1/infra/segments/api-ext-seg1"
+ external_segment1_id=$(curl --silent  -k -u $nsxtuser:$nsxtpasswd -H "Content-Type: application/json" -X GET "https://$baseUrl/policy/api/v1/infra/segments/api-ext-seg1" | jq -r '.id')
+ curl --silent -k -u $nsxtuser:$nsxtpasswd -H "Content-Type: application/json" -d '{"type": "DISCONNECTED","vlan_ids": ["2812"],"transport_zone_path": "/infra/sites/default/enforcement-points/default/transport-zones/'"$vlan_transport_zone_id"'"}' -X PATCH "https://$baseUrl/policy/api/v1/infra/segments/api-ext-seg2"
+ external_segment2_id=$(curl --silent  -k -u $nsxtuser:$nsxtpasswd -H "Content-Type: application/json" -X GET "https://$baseUrl/policy/api/v1/infra/segments/api-ext-seg2" | jq -r '.id')
+ echo "External segment ID: $external_segment1_id"
+ echo "External segment ID: $external_segment2_id"
+ echo ""
+
+ echo "Step 2: Create Tier-0 Gateway"
+ curl --silent -k -u $nsxtuser:$nsxtpasswd -H "Content-Type: application/json" -d '{"transit_subnets": ["100.64.0.0/16"],"internal_transit_subnets": ["169.254.0.0/24"]}' -X PATCH "https://$baseUrl/policy/api/v1/infra/tier-0s/api-tier-0"
+ tier_0_id=$(curl --silent -k -u $nsxtuser:$nsxtpasswd -H "Content-Type: application/json" -X GET "https://$baseUrl/policy/api/v1/infra/tier-0s/api-tier-0" | jq -r '.id')
+ echo "Tier-0 ID: $tier_0_id"
+ echo ""
+
+ echo "Step 3: Instantiate Tier-0 on Edge Cluster, and configure route redistribution"
+ curl --silent -k -u $nsxtuser:$nsxtpasswd -H "Content-Type: application/json" -d '{"route_redistribution_types": [ "TIER1_CONNECTED", "TIER0_CONNECTED" ],"edge_cluster_path": "/infra/sites/default/enforcement-points/default/edge-clusters/'"$edge_cluster_id"'"}' -X PATCH "https://$baseUrl/policy/api/v1/infra/tier-0s/api-tier-0/locale-services/default"
+ tier_0_cluster_id=$(curl --silent -k -u $nsxtuser:$nsxtpasswd -H "Content-Type: application/json" -X GET "https://$baseUrl/policy/api/v1/infra/tier-0s/api-tier-0/locale-services/default" | jq -r '.edge_cluster_path')
+ echo "Tier-0 Cluster ID: $tier_0_cluster_id"
+ echo ""
+
+ echo "Step 4: Add two uplink interfaces to Tier-0"
+ curl --silent -k -u $nsxtuser:$nsxtpasswd -H "Content-Type: application/json" -d '{"edge_path": "/infra/sites/default/enforcement-points/default/edge-clusters/'"$edge_cluster_id"'/edge-nodes/0","segment_path": "/infra/segments/api-ext-seg1","type": "EXTERNAL","subnets": [ {"ip_addresses": ["10.28.11.103"],"prefix_len": 24}]}' -X PATCH "https://$baseUrl/policy/api/v1/infra/tier-0s/api-tier-0/locale-services/default/interfaces/api-ext-uplink1"
+ curl --silent -k -u $nsxtuser:$nsxtpasswd -H "Content-Type: application/json" -d '{"edge_path": "/infra/sites/default/enforcement-points/default/edge-clusters/'"$edge_cluster_id"'/edge-nodes/1","segment_path": "/infra/segments/api-ext-seg2","type": "EXTERNAL","subnets": [ {"ip_addresses": ["10.28.12.103"],"prefix_len": 24}]}' -X PATCH "https://$baseUrl/policy/api/v1/infra/tier-0s/api-tier-0/locale-services/default/interfaces/api-ext-uplink2"
+ external_uplink1_id=$(curl --silent -k -u $nsxtuser:$nsxtpasswd -H "Content-Type: application/json" -X GET "https://$baseUrl/policy/api/v1/infra/tier-0s/api-tier-0/locale-services/default/interfaces/api-ext-uplink1" | jq -r '.id')
+ echo "External Uplink1 ID: $external_uplink1_id"
+ external_uplink2_id=$(curl --silent -k -u $nsxtuser:$nsxtpasswd -H "Content-Type: application/json" -X GET "https://$baseUrl/policy/api/v1/infra/tier-0s/api-tier-0/locale-services/default/interfaces/api-ext-uplink2" | jq -r '.id')
+ echo "External Uplink2 ID: $external_uplink2_id"
+ echo ""
+
+ echo "Step 5: Change Tier-0 BGP AS"
+ curl --silent -k -u $nsxtuser:$nsxtpasswd -H "Content-Type: application/json" -d '{"local_as_num": "65111"}' -X PATCH "https://$baseUrl/policy/api/v1/infra/tier-0s/api-tier-0/locale-services/default/bgp"
+ BGP_id=$(curl --silent -k -u $nsxtuser:$nsxtpasswd -H "Content-Type: application/json" -X GET "https://$baseUrl/policy/api/v1/infra/tier-0s/api-tier-0/locale-services/default/bgp" | jq -r '.id')
+ echo "BGP ID: $BGP_id"
+ echo ""
+
+ echo "Step 6: Add BGP Peers"
+ curl --silent -k -u $nsxtuser:$nsxtpasswd -H "Content-Type: application/json" -d '{"neighbor_address": "10.28.11.100","remote_as_num": "65100"}' -X PATCH "https://$baseUrl/policy/api/v1/infra/tier-0s/api-tier-0/locale-services/default/bgp/neighbors/api-peer1"
+ BGP_peer1_id=$(curl --silent -k -u $nsxtuser:$nsxtpasswd -H "Content-Type: application/json" -X GET "https://$baseUrl/policy/api/v1/infra/tier-0s/api-tier-0/locale-services/default/bgp/neighbors/api-peer1" | jq -r '.id')
+ curl --silent -k -u $nsxtuser:$nsxtpasswd -H "Content-Type: application/json" -d '{"neighbor_address": "10.28.12.100","remote_as_num": "65100"}' -X PATCH "https://$baseUrl/policy/api/v1/infra/tier-0s/api-tier-0/locale-services/default/bgp/neighbors/api-peer2"
+ BGP_peer2_id=$(curl --silent -k -u $nsxtuser:$nsxtpasswd -H "Content-Type: application/json" -X GET "https://$baseUrl/policy/api/v1/infra/tier-0s/api-tier-0/locale-services/default/bgp/neighbors/api-peer2" | jq -r '.id')
+
+ echo "BGP Peer ID: $BGP_peer1_id"
+ echo "BGP Peer ID: $BGP_peer2_id"
+ echo ""
+
+ echo "Step 7: Create DHCP Server" 
+ curl --silent -k -u $nsxtuser:$nsxtpasswd -H "Content-Type: application/json" -d '{"server_address": "192.168.60.1/24","edge_cluster_path": "/infra/sites/default/enforcement-points/default/edge-clusters/'"$edge_cluster_id"'","lease_time": 86400}' -X PATCH "https://$baseUrl/policy/api/v1/infra/dhcp-server-configs/api-dhcp-server"
+
+
+ echo "Step 8: Create Tier-1 Gateway, and configure route redistribution"
+ curl --silent -k -u $nsxtuser:$nsxtpasswd -H "Content-Type: application/json" -d '{"tier0_path": "/infra/tier-0s/api-tier-0","failover_mode": "NON_PREEMPTIVE","enable_standby_relocation": false,"dhcp_config_paths": ["/infra/dhcp-server-configs/api-dhcp-server"],"route_advertisement_types": ["TIER1_CONNECTED","TIER1_IPSEC_LOCAL_ENDPOINT"]}' -X PATCH "https://$baseUrl/policy/api/v1/infra/tier-1s/api-tier-1"
+ tier_1_id=$(curl --silent -k -u $nsxtuser:$nsxtpasswd -H "Content-Type: application/json" -X GET "https://$baseUrl/policy/api/v1/infra/tier-1s/api-tier-1" | jq -r '.id')
+ echo "Tier-1 ID: $tier_1_id"
+ echo ""
+
+ echo "Step 9: Instantiate Tier-1 in Edge Cluster"
+ curl --silent -k -u $nsxtuser:$nsxtpasswd -H "Content-Type: application/json" -d '{"edge_cluster_path": "/infra/sites/default/enforcement-points/default/edge-clusters/'"$edge_cluster_id"'"}' -X PATCH "https://$baseUrl/policy/api/v1/infra/tier-1s/api-tier-1/locale-services/default"
+ tier_1_clutser_id=$(curl --silent -k -u $nsxtuser:$nsxtpasswd -H "Content-Type: application/json" -X GET "https://$baseUrl/policy/api/v1/infra/tier-1s/api-tier-1/locale-services/default" | jq -r '.edge_cluster_path')
+ echo "Tier-1 Cluster ID: $tier_1_clutser_id"
+ echo ""
+
+echo "Step 10: Add Tier-1 Segment1"
+ curl --silent -k -u $nsxtuser:$nsxtpasswd -H "Content-Type: application/json" -d '{"type": "ROUTED","subnets": [{"gateway_address": "192.168.70.1/24","dhcp_ranges": ["192.168.70.100-192.168.70.199"], "network": "192.168.70.0/24"}],"connectivity_path": "/infra/tier-1s/api-tier-1","transport_zone_path": "/infra/sites/default/enforcement-points/default/transport-zones/'"$overlay_transport_zone_id"'"}}' -X PATCH "https://$baseUrl/policy/api/v1/infra/segments/api_seg1"
+ tier1_segment1_id=$(curl --silent -k -u $nsxtuser:$nsxtpasswd -H "Content-Type: application/json" -X GET "https://$baseUrl/policy/api/v1/infra/segments/api_seg1"| jq -r '.id')
+ echo "Tier-1 Segment1 ID: $tier1_segment1_id"
+ echo ""
+
+echo "Step 11: Add Tier-1 Segment2"
+ curl --silent -k -u $nsxtuser:$nsxtpasswd -H "Content-Type: application/json" -d '{"type": "ROUTED","subnets": [{"gateway_address": "192.168.71.1/24","dhcp_ranges": ["192.168.71.100-192.168.71.199"], "network": "192.168.71.0/24"}],"connectivity_path": "/infra/tier-1s/api-tier-1","transport_zone_path": "/infra/sites/default/enforcement-points/default/transport-zones/'"$overlay_transport_zone_id"'"}}' -X PATCH "https://$baseUrl/policy/api/v1/infra/segments/api_seg2"
+ tier1_segment2_id=$(curl --silent -k -u $nsxtuser:$nsxtpasswd -H "Content-Type: application/json" -X GET "https://$baseUrl/policy/api/v1/infra/segments/api_seg1"| jq -r '.id')
+ echo "Tier-1 Segment2 ID: $tier1_segment2_id"
+ echo ""
+
+ echo "All Done!"
+ echo ""
+#END_COMMENT
