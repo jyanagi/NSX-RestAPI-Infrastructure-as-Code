@@ -19,7 +19,6 @@ echo ""
  edge_node_1=$(curl --silent -k -u $nsxtuser:$nsxtpasswd -X GET "https://$baseUrl/api/v1/edge-clusters" | jq -r '.results[0].members[1].transport_node_id')
  echo "Edge Node 1: $edge_node_1"
  echo ""
-#<<'END_COMMENT'
 
 
  echo "Step 1: Create External Segments"
@@ -98,4 +97,3 @@ echo "Step 11: Add Tier-1 Segment2"
 
  echo "All Done!"
  echo ""
-#END_COMMENT
